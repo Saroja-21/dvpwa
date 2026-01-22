@@ -1,0 +1,51 @@
+pipeline:
+  name: dvpwa
+  identifier: dvpwa
+  projectIdentifier: SN_Project
+  orgIdentifier: default
+  tags: {}
+  properties:
+    ci:
+      codebase:
+        connectorRef: dvpwa
+        build: <+input>
+  stages:
+    - stage:
+        name: SCA_Build
+        identifier: SCA_Build
+        description: ""
+        type: CI
+        spec:
+          cloneCodebase: true
+          caching:
+            enabled: true
+            override: true
+          buildIntelligence:
+            enabled: true
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          execution:
+            steps:
+              - step:
+                  type: Snyk
+                  name: Snyk_SCA
+                  identifier: Snyk_SCA
+                  spec:
+                    mode: orchestration
+                    config: oss
+                    target:
+                      type: repository
+                      detection: auto
+                    advanced:
+                      log:
+                        level: info
+                      
+                      args:
+                        cli: "--json-file-output=snyk-results.json"
+                    privileged: true
+                    auth:
+                      access_token: <+secrets.getValue("snyk_api_token")>
