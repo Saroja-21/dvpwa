@@ -1,0 +1,148 @@
+pipeline:
+  name: dvpwa - Clone
+  identifier: dvpwa_Clone
+  projectIdentifier: SN_Project
+  orgIdentifier: default
+  properties:
+    ci:
+      codebase:
+        connectorRef: dvpwa
+        build: <+input>
+  stages:
+    - stage:
+        name: SCA_Build
+        identifier: SCA_Build
+        type: CI
+        spec:
+          cloneCodebase: true
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          execution:
+            steps:
+              - step:
+                  type: Background
+                  name: DinD
+                  identifier: DinD
+                  spec:
+                    image: docker:dind
+                    privileged: true
+              - parallel:
+                  - step:
+                      type: GitHubAdvancedSecurity
+                      name: GitHubAdvancedSecurity
+                      identifier: GitHubAdvancedSecurity
+                      spec:
+                        mode: orchestration
+                        config: dependabot
+                        target:
+                          type: repository
+                          detection: auto
+                        advanced:
+                          log:
+                            level: info
+                        privileged: true
+                        auth:
+                          access_token: <+secrets.getValue("dvpwa")>
+                  - step:
+                      type: Owasp
+                      name: Owasp
+                      identifier: Owasp
+                      spec:
+                        mode: orchestration
+                        config: default
+                        target:
+                          type: repository
+                          detection: auto
+                        advanced:
+                          log:
+                            level: info
+                          fail_on_severity: none
+                          args:
+                            cli: "--failOnCVSS 11 --disableOssIndex"
+              - step:
+                  type: OsvScanner
+                  name: OsvScanner
+                  identifier: OsvScanner
+                  spec:
+                    mode: orchestration
+                    config: default
+                    target:
+                      type: repository
+                      detection: auto
+                    advanced:
+                      log:
+                        level: info
+                      fail_on_severity: none
+              - step:
+                  type: Run
+                  name: OWASP_Report_Only
+                  identifier: OWASP_Report_Only
+                  spec:
+                    shell: Sh
+                    image: owasp/dependency-check:latest
+                    command: |
+                      echo "Generating OWASP Dependency-Check reports..."
+
+                      mkdir -p artifacts/dependency-check-report
+
+                      /usr/share/dependency-check/bin/dependency-check.sh \
+                        --scan . \
+                        --format ALL \
+                        --out artifacts/dependency-check-report \
+                        --disableOssIndex \
+                        --failOnCVSS 11
+
+                      ls -R artifacts/dependency-check-report
+              - step:
+                  type: Run
+                  name: OSV_Report_Only
+                  identifier: OSV_Report_Only
+                  spec:
+                    shell: Sh
+                    image: ghcr.io/google/osv-scanner:latest
+                    command: |
+                      echo "Generating OSV report..."
+
+                      mkdir -p artifacts
+
+                      osv-scanner scan \
+                        --format json \
+                        --output artifacts/osv-results.json \
+                        .
+
+                      ls -l artifacts/osv-results.json
+              - step:
+                  type: Plugin
+                  name: publish artifact
+                  identifier: publish_artifact
+                  spec:
+                    connectorRef: Harness_Docker
+                    image: plugins/artifact-metadata-publisher
+                    settings:
+                      file_urls: https://domain.com/path/to/artifact
+              - step:
+                  type: Run
+                  name: STO_Severity_Gate
+                  identifier: STO_Severity_Gate
+                  spec:
+                    shell: Sh
+                    command: |
+                      CRITICAL="<+pipeline.stages.SCA_Build.output.severityCounts.critical>"
+                      HIGH="<+pipeline.stages.SCA_Build.output.severityCounts.high>"
+
+                      CRITICAL=${CRITICAL:-0}
+                      HIGH=${HIGH:-0}
+
+                      echo "Critical: $CRITICAL"
+                      echo "High: $HIGH"
+
+                      if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
+                        echo "Security gate failed"
+                        exit 1
+                      fi
+
+                      echo "Security gate passed"
